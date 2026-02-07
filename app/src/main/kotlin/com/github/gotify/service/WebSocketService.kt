@@ -32,6 +32,7 @@ import com.github.gotify.client.api.ApplicationApi
 import com.github.gotify.client.api.MessageApi
 import com.github.gotify.client.model.Application
 import com.github.gotify.client.model.Message
+import com.github.gotify.database.LocalDataRepository
 import com.github.gotify.log.LoggerHelper
 import com.github.gotify.log.UncaughtExceptionHandler
 import com.github.gotify.messages.Extras
@@ -40,6 +41,10 @@ import com.github.gotify.messages.MessagesActivity
 import io.noties.markwon.Markwon
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import org.tinylog.kotlin.Logger
 
 internal class WebSocketService : Service() {
@@ -50,6 +55,7 @@ internal class WebSocketService : Service() {
     }
 
     private lateinit var settings: Settings
+    private lateinit var repository: LocalDataRepository
     private var connection: WebSocketConnection? = null
     private val networkCallback: ConnectivityManager.NetworkCallback =
         object : ConnectivityManager.NetworkCallback() {
@@ -75,6 +81,7 @@ internal class WebSocketService : Service() {
     override fun onCreate() {
         super.onCreate()
         settings = Settings(this)
+        repository = LocalDataRepository(this)
         val client = ClientFactory.clientToken(settings)
         missingMessageUtil = MissedMessageUtil(client.createService(MessageApi::class.java))
         Logger.info("Create ${javaClass.simpleName}")
@@ -105,6 +112,12 @@ internal class WebSocketService : Service() {
         showForegroundNotification(getString(R.string.websocket_init))
 
         if (lastReceivedMessage.get() == NOT_LOADED) {
+            runBlocking {
+                val localMessages = repository.getAllMessages()
+                if (localMessages.isNotEmpty()) {
+                    lastReceivedMessage.set(localMessages[0].id)
+                }
+            }
             missingMessageUtil.lastReceivedMessage { lastReceivedMessage.set(it) }
         }
 
@@ -223,6 +236,9 @@ internal class WebSocketService : Service() {
             }
             broadcast(message)
         }
+        CoroutineScope(Dispatchers.IO).launch {
+            repository.insertMessages(messages)
+        }
         val size = messages.size
         showNotification(
             NotificationSupport.ID.GROUPED,
@@ -236,6 +252,9 @@ internal class WebSocketService : Service() {
     private fun onMessage(message: Message) {
         if (lastReceivedMessage.get() < message.id) {
             lastReceivedMessage.set(message.id)
+        }
+        CoroutineScope(Dispatchers.IO).launch {
+            repository.insertMessages(listOf(message))
         }
         broadcast(message)
         showNotification(

@@ -8,16 +8,9 @@ Gotify Android connects to [gotify/server](https://github.com/gotify/server) and
 
 * show push notifications on new messages
 * view and delete messages
+* local message and application caching (Room) for offline access
+* automatic background sync: persists messages when received and on reconnect
 
-## Installation
-
-Download the apk or get the app via F-Droid or Google Play.
-
-[<img src="https://play.google.com/intl/en_gb/badges/images/generic/en_badge_web_generic.png" alt="Get it on Google Play" width="150" />][playstore]
-[<img src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png" alt="Get it on F-Droid" width="150"/>][fdroid]
-[<img src="download-badge.png" alt="Get it on F-Droid" width="150"/>][release]
-
-Google Play and the Google Play logo are trademarks of Google LLC.
 
 ### Disable battery optimization
 
@@ -75,6 +68,18 @@ We use [SemVer](http://semver.org/) for versioning. For the versions available, 
 
 ## License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details
+
+## This fork / extra features
+
+This repository contains a small fork of the original Gotify Android client with the following pragmatic additions aimed at improving offline usability:
+
+- Local persistence: messages and applications are stored in a Room database so the UI can show cached content when there is no network.
+- Instant offline UI: cached messages are loaded immediately on app start; network sync runs in the background and merges new messages without duplicating entries.
+- Minimal behavioral change: when online the app still behaves like the original client; the caching layer is additive and only affects behavior when offline or when reconnecting.
+
+Why this differs from the original
+- The upstream client focuses on live push notifications. This fork keeps that behavior but adds a lightweight local cache to make the app usable when the device is offline or the server is temporarily unreachable.
+- The changes are intentionally small and follow the project's existing patterns (Room, repository layer, and existing model classes) to keep maintenance and merging straightforward.
 
  [github-action-badge]: https://github.com/gotify/android/workflows/Build/badge.svg
  [github-action]: https://github.com/gotify/android/actions?query=workflow%3ABuild
