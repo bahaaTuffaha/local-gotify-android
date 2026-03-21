@@ -560,11 +560,21 @@ internal class MessagesActivity :
     }
 
     private suspend fun loadMore(appId: Long): List<MessageWithImage> {
-        val messagesWithImages = viewModel.messages.loadMore(appId)
-        withContext(Dispatchers.Main) {
-            updateMessagesAndStopLoading(messagesWithImages)
+        return try {
+            val messagesWithImages = viewModel.messages.loadMore(appId)
+            withContext(Dispatchers.Main) {
+                updateMessagesAndStopLoading(messagesWithImages)
+            }
+            messagesWithImages
+        } catch (t: Throwable) {
+            Logger.error(t, "Failed loading messages")
+            withContext(Dispatchers.Main) {
+                isLoadMore = false
+                stopLoading()
+                updateMessagesAndStopLoading(viewModel.messages[appId])
+            }
+            viewModel.messages[appId]
         }
-        return messagesWithImages
     }
 
     private suspend fun updateMessagesForApplication(withLoadingSpinner: Boolean, appId: Long) {
@@ -573,9 +583,22 @@ internal class MessagesActivity :
                 startLoading()
             }
         }
-        viewModel.messages.loadMoreIfNotPresent(appId)
-        withContext(Dispatchers.Main) {
-            updateMessagesAndStopLoading(viewModel.messages[appId])
+        try {
+            // If it's the first load, show database content immediately
+            if (!viewModel.messages.isLoaded(appId)) {
+                viewModel.messages.loadFromDb(appId)
+                withContext(Dispatchers.Main) {
+                    updateMessagesAndStopLoading(viewModel.messages[appId])
+                    if (withLoadingSpinner) startLoading() // Resume loading for network phase
+                }
+            }
+            viewModel.messages.loadMore(appId)
+        } catch (t: Throwable) {
+            Logger.error(t, "Failed updating messages for appId=$appId")
+        } finally {
+            withContext(Dispatchers.Main) {
+                updateMessagesAndStopLoading(viewModel.messages[appId])
+            }
         }
     }
 

@@ -6,8 +6,17 @@ import com.github.gotify.api.Callback
 import com.github.gotify.client.ApiClient
 import com.github.gotify.client.api.ApplicationApi
 import com.github.gotify.client.model.Application
+import com.github.gotify.database.LocalDataRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
-internal class ApplicationHolder(private val activity: Activity, private val client: ApiClient) {
+internal class ApplicationHolder(
+    private val activity: Activity,
+    private val client: ApiClient,
+    private val repository: LocalDataRepository
+) {
     private var state = listOf<Application>()
     private var onUpdate: Runnable? = null
     private var onUpdateFailed: Runnable? = null
@@ -29,11 +38,25 @@ internal class ApplicationHolder(private val activity: Activity, private val cli
     private fun onReceiveApps(apps: List<Application>) {
         state = apps
         if (onUpdate != null) onUpdate!!.run()
+        CoroutineScope(Dispatchers.IO).launch {
+            repository.deleteAllApplications()
+            repository.insertApplications(apps)
+        }
     }
 
     private fun onFailedApps() {
-        Utils.showSnackBar(activity, "Could not request applications, see logs.")
-        if (onUpdateFailed != null) onUpdateFailed!!.run()
+        CoroutineScope(Dispatchers.IO).launch {
+            val apps = repository.getAllApplications()
+            withContext(Dispatchers.Main) {
+                if (apps.isNotEmpty()) {
+                    state = apps
+                    if (onUpdate != null) onUpdate!!.run()
+                } else {
+                    Utils.showSnackBar(activity, "Could not request applications, see logs.")
+                    if (onUpdateFailed != null) onUpdateFailed!!.run()
+                }
+            }
+        }
     }
 
     fun get() = state

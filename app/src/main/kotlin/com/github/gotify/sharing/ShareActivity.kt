@@ -17,6 +17,7 @@ import com.github.gotify.api.ClientFactory
 import com.github.gotify.client.api.MessageApi
 import com.github.gotify.client.model.Application
 import com.github.gotify.client.model.Message
+import com.github.gotify.database.LocalDataRepository
 import com.github.gotify.databinding.ActivityShareBinding
 import com.github.gotify.messages.provider.ApplicationHolder
 import kotlinx.coroutines.Dispatchers
@@ -62,7 +63,8 @@ internal class ShareActivity : AppCompatActivity() {
         }
 
         val client = ClientFactory.clientToken(settings)
-        appsHolder = ApplicationHolder(this, client)
+        val repository = LocalDataRepository(this)
+        appsHolder = ApplicationHolder(this, client, repository)
         appsHolder.onUpdate {
             val apps = appsHolder.get()
             populateSpinner(apps)

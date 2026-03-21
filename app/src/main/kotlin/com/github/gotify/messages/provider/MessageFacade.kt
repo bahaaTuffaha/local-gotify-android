@@ -2,8 +2,19 @@ package com.github.gotify.messages.provider
 
 import com.github.gotify.client.api.MessageApi
 import com.github.gotify.client.model.Message
+import com.github.gotify.client.model.PagedMessages
+import com.github.gotify.client.model.Paging
+import com.github.gotify.database.LocalDataRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import org.tinylog.kotlin.Logger
 
-internal class MessageFacade(api: MessageApi, private val applicationHolder: ApplicationHolder) {
+internal class MessageFacade(
+    private val api: MessageApi,
+    private val applicationHolder: ApplicationHolder,
+    private val repository: LocalDataRepository
+) {
     private val requester = MessageRequester(api)
     private val state = MessageStateHolder()
 
@@ -17,22 +28,51 @@ internal class MessageFacade(api: MessageApi, private val applicationHolder: App
         messages.forEach {
             state.newMessage(it)
         }
+        CoroutineScope(Dispatchers.IO).launch {
+            repository.insertMessages(messages)
+        }
     }
 
-    @Synchronized
-    fun loadMore(appId: Long): List<MessageWithImage> {
-        val state = state.state(appId)
-        if (state.hasNext || !state.loaded) {
-            val pagedMessages = requester.loadMore(state)
-            if (pagedMessages != null) {
-                this.state.newMessages(appId, pagedMessages)
+    fun isLoaded(appId: Long): Boolean = state.state(appId).loaded
+
+    suspend fun loadFromDb(appId: Long) {
+        val currentState = state.state(appId)
+        if (!currentState.loaded) {
+            val localMessages = if (appId == MessageState.ALL_MESSAGES) {
+                repository.getAllMessages()
+            } else {
+                repository.getMessagesByApp(appId)
+            }
+            val localPaged = PagedMessages().paging(Paging())
+            localPaged.messages.addAll(localMessages)
+            this.state.newMessages(appId, localPaged)
+        }
+    }
+
+    suspend fun loadMore(appId: Long): List<MessageWithImage> {
+        val currentState = state.state(appId)
+        if (currentState.hasNext || !currentState.loaded) {
+            try {
+                val pagedMessages = requester.loadMore(currentState)
+                if (pagedMessages != null) {
+                    this.state.newMessages(appId, pagedMessages)
+                    repository.insertMessages(pagedMessages.messages)
+                } else {
+                    if (!currentState.loaded) {
+                        this.state.newMessages(appId, PagedMessages())
+                    }
+                }
+            } catch (e: Exception) {
+                Logger.error(e, "MessageFacade: network load failed")
+                if (!currentState.loaded) {
+                    this.state.newMessages(appId, PagedMessages())
+                }
             }
         }
         return get(appId)
     }
 
-    @Synchronized
-    fun loadMoreIfNotPresent(appId: Long) {
+    suspend fun loadMoreIfNotPresent(appId: Long) {
         val state = state.state(appId)
         if (!state.loaded) {
             loadMore(appId)
@@ -52,6 +92,9 @@ internal class MessageFacade(api: MessageApi, private val applicationHolder: App
         // next deletion.
         if (state.deletionPending()) commitDelete()
         state.deleteMessage(message)
+        CoroutineScope(Dispatchers.IO).launch {
+            repository.deleteMessage(message.id)
+        }
     }
 
     @Synchronized
@@ -63,12 +106,26 @@ internal class MessageFacade(api: MessageApi, private val applicationHolder: App
     }
 
     @Synchronized
-    fun undoDeleteLocal(): MessageDeletion? = state.undoPendingDeletion()
+    fun undoDeleteLocal(): MessageDeletion? {
+        val deletion = state.undoPendingDeletion()
+        if (deletion != null) {
+            CoroutineScope(Dispatchers.IO).launch {
+                repository.insertMessages(listOf(deletion.message))
+            }
+        }
+        return deletion
+    }
 
-    @Synchronized
-    fun deleteAll(appId: Long): Boolean {
+    suspend fun deleteAll(appId: Long): Boolean {
         val success = requester.deleteAll(appId)
-        state.deleteAll(appId)
+        if (success) {
+            state.deleteAll(appId)
+            if (appId == MessageState.ALL_MESSAGES) {
+                repository.deleteAllMessages()
+            } else {
+                repository.deleteMessagesByApp(appId)
+            }
+        }
         return success
     }
 

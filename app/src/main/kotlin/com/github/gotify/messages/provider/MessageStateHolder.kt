@@ -26,9 +26,18 @@ internal class MessageStateHolder {
 
         state.apply {
             loaded = true
-            messages.addAll(pagedMessages.messages)
-            hasNext = pagedMessages.paging.next != null
-            nextSince = pagedMessages.paging.since
+            val newMessages = pagedMessages.messages.filter { msg ->
+                messages.none { it.id == msg.id }
+            }
+            messages.addAll(newMessages)
+            messages.sortByDescending { it.id ?: Long.MIN_VALUE }
+            if (pagedMessages.paging != null) {
+                hasNext = pagedMessages.paging.next != null
+                nextSince = pagedMessages.paging.since ?: 0L
+            } else {
+                hasNext = false
+                nextSince = 0L
+            }
             this.appId = appId
         }
         states[appId] = state

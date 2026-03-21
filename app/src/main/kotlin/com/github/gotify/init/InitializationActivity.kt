@@ -11,6 +11,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.lifecycle.lifecycleScope
 import com.github.gotify.R
 import com.github.gotify.Settings
 import com.github.gotify.api.ApiException
@@ -19,6 +20,7 @@ import com.github.gotify.api.Callback.SuccessCallback
 import com.github.gotify.api.ClientFactory
 import com.github.gotify.client.model.User
 import com.github.gotify.client.model.VersionInfo
+import com.github.gotify.database.LocalDataRepository
 import com.github.gotify.login.LoginActivity
 import com.github.gotify.messages.MessagesActivity
 import com.github.gotify.service.WebSocketService
@@ -26,6 +28,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.livinglifetechway.quickpermissionskotlin.runWithPermissions
 import com.livinglifetechway.quickpermissionskotlin.util.QuickPermissionsOptions
 import com.livinglifetechway.quickpermissionskotlin.util.QuickPermissionsRequest
+import kotlinx.coroutines.launch
 import org.tinylog.kotlin.Logger
 
 internal class InitializationActivity : AppCompatActivity() {
@@ -91,13 +94,21 @@ internal class InitializationActivity : AppCompatActivity() {
     }
 
     private fun failed(exception: ApiException) {
+        if (exception.code == 0) {
+            lifecycleScope.launch {
+                if (LocalDataRepository(this@InitializationActivity).hasData()) {
+                    Logger.info("Offline but local data exists, bypassing authentication")
+                    settings.user?.let { authenticated(it) }
+                } else {
+                    stopSlashScreen()
+                    dialog(getString(R.string.not_available, settings.url))
+                }
+            }
+            return
+        }
+
         stopSlashScreen()
         when (exception.code) {
-            0 -> {
-                dialog(getString(R.string.not_available, settings.url))
-                return
-            }
-
             401 -> {
                 dialog(getString(R.string.auth_failed))
                 return
