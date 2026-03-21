@@ -24,6 +24,7 @@ import androidx.core.graphics.drawable.DrawableCompat
 import androidx.core.graphics.drawable.toDrawable
 import androidx.core.net.toUri
 import androidx.core.view.GravityCompat
+import androidx.appcompat.widget.SearchView
 import androidx.drawerlayout.widget.DrawerLayout.SimpleDrawerListener
 import androidx.lifecycle.ViewModelProvider
 import androidx.preference.PreferenceManager
@@ -74,6 +75,7 @@ internal class MessagesActivity :
     private var updateAppOnDrawerClose: Long? = null
     private lateinit var listMessageAdapter: ListMessageAdapter
     private lateinit var onBackPressedCallback: OnBackPressedCallback
+    private var searchQuery: String = ""
 
     private val receiver: BroadcastReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -516,6 +518,19 @@ internal class MessagesActivity :
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.messages_action, menu)
+        val searchItem = menu.findItem(R.id.action_search)
+        val searchView = searchItem.actionView as SearchView
+        searchView.setOnQueryTextListener(object : SearchView.OnQueryTextListener {
+            override fun onQueryTextSubmit(query: String?): Boolean {
+                return false
+            }
+
+            override fun onQueryTextChange(newText: String?): Boolean {
+                searchQuery = newText ?: ""
+                updateMessagesAndStopLoading(viewModel.messages[viewModel.appId])
+                return true
+            }
+        })
         menu.findItem(R.id.action_delete_app).isVisible =
             viewModel.appId != MessageState.ALL_MESSAGES
         return super.onCreateOptionsMenu(menu)
@@ -657,13 +672,24 @@ internal class MessagesActivity :
     private fun updateMessagesAndStopLoading(messageWithImages: List<MessageWithImage>) {
         isLoadMore = false
         stopLoading()
-        if (messageWithImages.isEmpty()) {
+
+        val filteredMessages = if (searchQuery.isEmpty()) {
+            messageWithImages
+        } else {
+            messageWithImages.filter {
+                it.message.message?.contains(searchQuery, ignoreCase = true) == true ||
+                    it.message.title?.contains(searchQuery, ignoreCase = true) == true
+            }
+        }
+
+        if (filteredMessages.isEmpty()) {
             binding.flipper.displayedChild = 1
         } else {
             binding.flipper.displayedChild = 0
         }
         val adapter = binding.messagesView.adapter as ListMessageAdapter
-        adapter.updateList(messageWithImages)
+        adapter.updateSearchQuery(searchQuery)
+        adapter.updateList(filteredMessages)
     }
 
     private fun ListMessageAdapter.updateList(list: List<MessageWithImage>) {

@@ -96,6 +96,7 @@ dependencies {
     implementation("io.noties.markwon:image:$markwonVersion")
     implementation("io.noties.markwon:ext-tables:$markwonVersion")
     implementation("io.noties.markwon:ext-strikethrough:$markwonVersion")
+    implementation("io.noties.markwon:html:$markwonVersion")
 
     implementation("org.tinylog:tinylog-api-kotlin:$tinylogVersion")
     implementation("org.tinylog:tinylog-impl:$tinylogVersion")

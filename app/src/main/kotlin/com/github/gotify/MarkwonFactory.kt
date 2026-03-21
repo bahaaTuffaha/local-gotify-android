@@ -24,6 +24,7 @@ import io.noties.markwon.core.MarkwonTheme
 import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
 import io.noties.markwon.ext.tables.TableAwareMovementMethod
 import io.noties.markwon.ext.tables.TablePlugin
+import io.noties.markwon.html.HtmlPlugin
 import io.noties.markwon.image.AsyncDrawable
 import io.noties.markwon.image.coil.CoilImagesPlugin
 import io.noties.markwon.movement.MovementMethodPlugin
@@ -70,6 +71,7 @@ internal object MarkwonFactory {
             )
             .usePlugin(StrikethroughPlugin.create())
             .usePlugin(TablePlugin.create(context))
+            .usePlugin(HtmlPlugin.create())
             .usePlugin(object : AbstractMarkwonPlugin() {
                 override fun configureTheme(builder: MarkwonTheme.Builder) {
                     builder.linkColor(ContextCompat.getColor(context, R.color.hyperLink))
@@ -87,6 +89,7 @@ internal object MarkwonFactory {
             .usePlugin(CorePlugin.create())
             .usePlugin(CoilImagesPlugin.create(context, imageLoader))
             .usePlugin(StrikethroughPlugin.create())
+            .usePlugin(HtmlPlugin.create())
             .usePlugin(object : AbstractMarkwonPlugin() {
                 override fun configureSpansFactory(builder: MarkwonSpansFactory.Builder) {
                     builder.setFactory(Heading::class.java) { _, props: RenderProps? ->
