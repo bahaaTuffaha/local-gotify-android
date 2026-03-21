@@ -34,6 +34,7 @@
     </string-array>
     <string name="time_format_value_absolute">time_format_absolute</string>
     <string name="time_format_value_relative">time_format_relative</string>
+
     <bool name="notification_channels">false</bool>
     <bool name="exclude_from_recent">false</bool>
     <bool name="prompt_onreceive_intent">true</bool>

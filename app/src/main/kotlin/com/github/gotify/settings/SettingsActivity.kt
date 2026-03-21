@@ -21,6 +21,7 @@ import androidx.preference.SwitchPreferenceCompat
 import com.github.gotify.R
 import com.github.gotify.Utils
 import com.github.gotify.databinding.SettingsActivityBinding
+import com.github.gotify.service.WebSocketService
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 
 internal class SettingsActivity :
@@ -74,6 +75,34 @@ internal class SettingsActivity :
                     getString(R.string.setting_key_notification_channels)
                 )?.isEnabled = true
             }
+            findPreference<androidx.preference.EditTextPreference>(
+                getString(R.string.setting_key_reconnect_delay)
+            )?.onPreferenceChangeListener =
+                Preference.OnPreferenceChangeListener { _, newValue ->
+                    val value = (newValue as String).trim().toIntOrNull() ?: 60
+                    if (value !in 5..1200) {
+                        Utils.showSnackBar(
+                            requireActivity(),
+                            "Please enter a value between 5 and 1200"
+                        )
+                        return@OnPreferenceChangeListener false
+                    }
+
+                    requestWebSocketRestart()
+                    true
+                }
+            findPreference<SwitchPreferenceCompat>(
+                getString(R.string.setting_key_exponential_backoff)
+            )?.onPreferenceChangeListener =
+                Preference.OnPreferenceChangeListener { _, _ ->
+                    requestWebSocketRestart()
+                    true
+                }
+        }
+
+        private fun requestWebSocketRestart() {
+            val intent = Intent(requireContext(), WebSocketService::class.java)
+            requireContext().startService(intent)
         }
 
         override fun onViewCreated(view: View, savedInstanceState: Bundle?) {

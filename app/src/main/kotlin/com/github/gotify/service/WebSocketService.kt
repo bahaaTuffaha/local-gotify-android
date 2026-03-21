@@ -41,6 +41,11 @@ import com.github.gotify.messages.MessagesActivity
 import io.noties.markwon.Markwon
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.DurationUnit
+import kotlin.time.toDuration
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -123,16 +128,29 @@ internal class WebSocketService : Service() {
 
         val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
         val alarmManager = getSystemService(ALARM_SERVICE) as AlarmManager
+        val sharedPreferences = PreferenceManager.getDefaultSharedPreferences(this)
+        val reconnectDelay =
+            sharedPreferences.getString(
+                getString(R.string.setting_key_reconnect_delay),
+                null
+            )?.toIntOrNull()?.toDuration(DurationUnit.SECONDS) ?: 1.minutes
+
+        val exponentialBackoff = sharedPreferences.getBoolean(
+            getString(R.string.setting_key_exponential_backoff),
+            true
+        )
 
         connection = WebSocketConnection(
             settings.url,
             settings.sslSettings(),
             settings.token,
-            alarmManager
+            alarmManager,
+            reconnectDelay,
+            exponentialBackoff
         )
             .onOpen { onOpen() }
             .onClose { onClose() }
-            .onFailure { status, minutes -> onFailure(status, minutes) }
+            .onFailure { status, reconnectIn -> onFailure(status, reconnectIn) }
             .onMessage { message -> onMessage(message) }
             .onReconnected { notifyMissedNotifications() }
             .start()
@@ -193,16 +211,14 @@ internal class WebSocketService : Service() {
     }
 
     private fun doReconnect() {
-        connection?.scheduleReconnectNow(15)
+        connection?.scheduleReconnectNow(15.seconds)
     }
 
-    private fun onFailure(status: String, minutes: Int) {
+    private fun onFailure(status: String, reconnectIn: Duration) {
         val title = getString(R.string.websocket_error, status)
-        val intervalUnit = resources
-            .getQuantityString(R.plurals.websocket_retry_interval, minutes, minutes)
         showForegroundNotification(
             title,
-            "${getString(R.string.websocket_reconnect)} $intervalUnit"
+            getString(R.string.websocket_reconnect, reconnectIn.toString())
         )
     }
 
