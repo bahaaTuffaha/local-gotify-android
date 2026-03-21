@@ -4,7 +4,11 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.SharedPreferences
+import android.graphics.Color
+import android.text.Spannable
+import android.text.SpannableString
 import android.text.format.DateUtils
+import android.text.style.BackgroundColorSpan
 import android.text.util.Linkify
 import android.view.LayoutInflater
 import android.view.View
@@ -41,6 +45,7 @@ internal class ListMessageAdapter(
 ) : ListAdapter<MessageWithImage, ListMessageAdapter.ViewHolder>(DiffCallback) {
     private val prefs: SharedPreferences = PreferenceManager.getDefaultSharedPreferences(context)
     private val markwon: Markwon = MarkwonFactory.createForMessage(context, imageLoader)
+    private var searchQuery: String = ""
 
     private val timeFormatRelative =
         context.resources.getString(R.string.time_format_value_relative)
@@ -73,14 +78,13 @@ internal class ListMessageAdapter(
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val message = currentList[position]
-        if (Extras.useMarkdown(message.message)) {
-            holder.message.autoLinkMask = 0
-            markwon.setMarkdown(holder.message, message.message.message)
-        } else {
-            holder.message.autoLinkMask = Linkify.WEB_URLS
-            holder.message.text = message.message.message
-        }
+        holder.message.autoLinkMask = 0
+        markwon.setMarkdown(holder.message, message.message.message)
+        highlightSearchQuery(holder.message)
+
         holder.title.text = message.message.title
+        highlightSearchQuery(holder.title)
+
         if (message.image != null) {
             val url = Utils.resolveAbsoluteUrl("${settings.url}/", message.image)
             holder.image.load(url, imageLoader) {
@@ -203,5 +207,33 @@ internal class ListMessageAdapter(
 
     fun interface Delete {
         fun delete(message: Message)
+    }
+
+    fun updateSearchQuery(query: String) {
+        this.searchQuery = query
+    }
+
+    private fun highlightSearchQuery(textView: TextView) {
+        if (searchQuery.isEmpty()) return
+
+        val text = textView.text ?: return
+        val spannableString = if (text is Spannable) {
+            text
+        } else {
+            SpannableString(text)
+        }
+
+        var startIndex = text.indexOf(searchQuery, ignoreCase = true)
+        while (startIndex != -1) {
+            val endIndex = startIndex + searchQuery.length
+            spannableString.setSpan(
+                BackgroundColorSpan(Color.YELLOW),
+                startIndex,
+                endIndex,
+                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
+            startIndex = text.indexOf(searchQuery, endIndex, ignoreCase = true)
+        }
+        textView.text = spannableString
     }
 }
