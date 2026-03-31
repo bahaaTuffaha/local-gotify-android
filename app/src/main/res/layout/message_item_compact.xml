@@ -14,7 +14,7 @@
         android:layout_height="20dp"
         android:layout_marginEnd="8dp"
         tools:text="1 hour ago"
-        app:layout_constraintEnd_toStartOf="@+id/message_delete"
+        app:layout_constraintEnd_toStartOf="@+id/message_favorite"
         app:layout_constraintTop_toTopOf="parent" />
 
     <com.google.android.material.textview.MaterialTextView
@@ -55,6 +55,17 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toEndOf="@+id/message_image"
         app:layout_constraintTop_toBottomOf="@+id/message_title" />
+
+    <ImageButton
+        android:id="@+id/message_favorite"
+        android:layout_width="30dp"
+        android:layout_height="30dp"
+        android:background="@null"
+        android:contentDescription="@string/favorite_message"
+        app:layout_constraintBottom_toBottomOf="@+id/message_date"
+        app:layout_constraintEnd_toStartOf="@+id/message_delete"
+        app:layout_constraintTop_toTopOf="parent"
+        app:srcCompat="@drawable/ic_star_border" />
 
     <ImageButton
         android:id="@+id/message_delete"

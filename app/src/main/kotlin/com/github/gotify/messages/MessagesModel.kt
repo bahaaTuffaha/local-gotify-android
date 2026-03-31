@@ -22,4 +22,5 @@ internal class MessagesModel(parentView: Activity) : ViewModel() {
     val targetReferences = mutableListOf<Target>()
 
     var appId = MessageState.ALL_MESSAGES
+    var listMode = MessageListMode.UNREAD
 }

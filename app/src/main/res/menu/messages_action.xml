@@ -7,6 +7,12 @@
         app:showAsAction="always|collapseActionView"
         app:actionViewClass="androidx.appcompat.widget.SearchView" />
     <item
+        android:id="@+id/action_toggle_read"
+        android:icon="@drawable/ic_mark_read"
+        android:title="@string/show_read_messages"
+        app:iconTint="@android:color/white"
+        app:showAsAction="always" />
+    <item
         android:title="@string/delete_all"
         android:id="@+id/action_delete_all"
         android:orderInCategory="100"/>

@@ -17,6 +17,7 @@ import android.view.View
 import android.widget.ImageButton
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.ActionBarDrawerToggle
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -72,10 +73,19 @@ internal class MessagesActivity :
     private lateinit var binding: ActivityMessagesBinding
     private lateinit var viewModel: MessagesModel
     private var isLoadMore = false
-    private var updateAppOnDrawerClose: Long? = null
+    private var pendingSelection: PendingSelection? = null
     private lateinit var listMessageAdapter: ListMessageAdapter
     private lateinit var onBackPressedCallback: OnBackPressedCallback
     private var searchQuery: String = ""
+    private val settingsLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == RESULT_OK) {
+                launchCoroutine {
+                    viewModel.messages.clear()
+                    updateCurrentMessageSelection(true)
+                }
+            }
+        }
 
     private val receiver: BroadcastReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -107,10 +117,10 @@ internal class MessagesActivity :
         listMessageAdapter = ListMessageAdapter(
             this,
             viewModel.settings,
-            CoilInstance.get(this)
-        ) { message ->
-            scheduleDeletion(message)
-        }
+            CoilInstance.get(this),
+            delete = { message -> confirmDelete(message) },
+            favorite = { message -> toggleFavorite(message) }
+        )
         addBackPressCallback()
 
         messagesView.addItemDecoration(dividerItemDecoration)
@@ -123,7 +133,7 @@ internal class MessagesActivity :
         appsHolder.onUpdate { onUpdateApps(appsHolder.get()) }
         if (appsHolder.wasRequested()) onUpdateApps(appsHolder.get()) else appsHolder.request()
 
-        val itemTouchHelper = ItemTouchHelper(SwipeToDeleteCallback(listMessageAdapter))
+        val itemTouchHelper = ItemTouchHelper(SwipeToReadCallback(listMessageAdapter))
         itemTouchHelper.attachToRecyclerView(messagesView)
 
         val swipeRefreshLayout = binding.swipeRefresh
@@ -135,11 +145,13 @@ internal class MessagesActivity :
                 }
 
                 override fun onDrawerClosed(drawerView: View) {
-                    updateAppOnDrawerClose?.let { selectApp ->
-                        updateAppOnDrawerClose = null
-                        viewModel.appId = selectApp
+                    pendingSelection?.let { selection ->
+                        pendingSelection = null
+                        viewModel.appId = selection.appId
+                        viewModel.listMode = selection.listMode
+                        updateToolbarSubtitle()
                         launchCoroutine {
-                            updateMessagesForApplication(true, selectApp)
+                            updateCurrentMessageSelection(true)
                         }
                         invalidateOptionsMenu()
                     }
@@ -163,8 +175,9 @@ internal class MessagesActivity :
         val excludeFromRecent = PreferenceManager.getDefaultSharedPreferences(this)
             .getBoolean(getString(R.string.setting_key_exclude_from_recent), false)
         Utils.setExcludeFromRecent(this, excludeFromRecent)
+        updateToolbarSubtitle()
         launchCoroutine {
-            updateMessagesForApplication(true, viewModel.appId)
+            updateCurrentMessageSelection(true)
         }
     }
 
@@ -183,7 +196,8 @@ internal class MessagesActivity :
         CoilInstance.evict(this)
         viewModel.messages.clear()
         launchCoroutine {
-            loadMore(viewModel.appId).forEachIndexed { index, message ->
+            updateCurrentMessageSelection(true)
+            currentMessages().forEachIndexed { index, message ->
                 if (message.image != null) {
                     listMessageAdapter.notifyItemChanged(index)
                 }
@@ -200,13 +214,17 @@ internal class MessagesActivity :
         val menu: Menu = binding.navView.menu
         menu.removeGroup(R.id.apps)
         viewModel.targetReferences.clear()
-        updateMessagesAndStopLoading(viewModel.messages[viewModel.appId])
-        var selectedItem = menu.findItem(R.id.nav_all_messages)
+        updateMessagesAndStopLoading(currentMessages())
+        var selectedItem = menu.findItem(
+            if (viewModel.listMode == MessageListMode.FAVORITES) R.id.nav_favorites else R.id.nav_all_messages
+        )
         applications.indices.forEach { index ->
             val app = applications[index]
             val item = menu.add(R.id.apps, index, APPLICATION_ORDER, app.name)
             item.isCheckable = true
-            if (app.id == viewModel.appId) selectedItem = item
+            if (viewModel.listMode != MessageListMode.FAVORITES && app.id == viewModel.appId) {
+                selectedItem = item
+            }
             val t = Utils.toDrawable { icon -> item.icon = icon }
             viewModel.targetReferences.add(t)
             val request = ImageRequest.Builder(this)
@@ -219,6 +237,7 @@ internal class MessagesActivity :
             CoilInstance.get(this).enqueue(request)
         }
         selectAppInMenu(selectedItem)
+        updateToolbarSubtitle()
     }
 
     private fun initDrawer() {
@@ -269,13 +288,14 @@ internal class MessagesActivity :
         val id = item.itemId
         if (item.groupId == R.id.apps) {
             val app = viewModel.appsHolder.get()[id]
-            updateAppOnDrawerClose = app.id
+            pendingSelection = PendingSelection(app.id, MessageListMode.UNREAD)
             startLoading()
-            binding.appBarDrawer.toolbar.subtitle = item.title
         } else if (id == R.id.nav_all_messages) {
-            updateAppOnDrawerClose = MessageState.ALL_MESSAGES
+            pendingSelection = PendingSelection(MessageState.ALL_MESSAGES, MessageListMode.UNREAD)
             startLoading()
-            binding.appBarDrawer.toolbar.subtitle = ""
+        } else if (id == R.id.nav_favorites) {
+            pendingSelection = PendingSelection(viewModel.appId, MessageListMode.FAVORITES)
+            startLoading()
         } else if (id == R.id.logout) {
             MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.logout)
@@ -286,7 +306,7 @@ internal class MessagesActivity :
         } else if (id == R.id.nav_logs) {
             startActivity(Intent(this, LogsActivity::class.java))
         } else if (id == R.id.settings) {
-            startActivity(Intent(this, SettingsActivity::class.java))
+            settingsLauncher.launch(Intent(this, SettingsActivity::class.java))
         } else if (id == R.id.push_message) {
             val intent = Intent(this@MessagesActivity, ShareActivity::class.java)
             startActivity(intent)
@@ -327,9 +347,13 @@ internal class MessagesActivity :
         launchCoroutine {
             updateMissedMessages(viewModel.messages.getLastReceivedMessage())
         }
-        var selectedIndex = R.id.nav_all_messages
+        var selectedIndex = if (viewModel.listMode == MessageListMode.FAVORITES) {
+            R.id.nav_favorites
+        } else {
+            R.id.nav_all_messages
+        }
         val appId = viewModel.appId
-        if (appId != MessageState.ALL_MESSAGES) {
+        if (viewModel.listMode != MessageListMode.FAVORITES && appId != MessageState.ALL_MESSAGES) {
             val apps = viewModel.appsHolder.get()
             apps.indices.forEach { index ->
                 if (apps[index].id == appId) {
@@ -340,6 +364,7 @@ internal class MessagesActivity :
         // Force re-render of all items to update relative date-times on app resume.
         listMessageAdapter.notifyDataSetChanged()
         selectAppInMenu(binding.navView.menu.findItem(selectedIndex))
+        updateToolbarSubtitle()
         super.onResume()
     }
 
@@ -351,18 +376,35 @@ internal class MessagesActivity :
     private fun selectAppInMenu(appItem: MenuItem?) {
         if (appItem != null) {
             appItem.isChecked = true
-            if (appItem.itemId != R.id.nav_all_messages) {
-                binding.appBarDrawer.toolbar.subtitle = appItem.title
-            }
         }
     }
 
-    private fun scheduleDeletion(message: Message) {
+    private fun confirmDelete(message: MessageWithImage) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.delete_message)
+            .setMessage(R.string.delete_message_confirm)
+            .setPositiveButton(R.string.yes) { _, _ -> scheduleDeletion(message) }
+            .setNegativeButton(R.string.no, null)
+            .show()
+    }
+
+    private fun scheduleDeletion(message: MessageWithImage) {
         val adapter = binding.messagesView.adapter as ListMessageAdapter
         val messages = viewModel.messages
-        messages.deleteLocal(message)
-        adapter.updateList(messages[viewModel.appId])
+        messages.deleteLocal(message.message)
+        adapter.updateList(currentMessages())
         showDeletionSnackbar()
+    }
+
+    private fun toggleFavorite(message: MessageWithImage) {
+        viewModel.messages.toggleFavorite(message.message)
+        updateMessagesAndStopLoading(currentMessages())
+    }
+
+    private fun markMessageAsRead(message: MessageWithImage) {
+        viewModel.messages.markAsRead(message.message)
+        updateMessagesAndStopLoading(currentMessages())
+        showMarkedReadSnackbar(message.message)
     }
 
     private fun undoDelete() {
@@ -370,8 +412,7 @@ internal class MessagesActivity :
         val deletion = messages.undoDeleteLocal()
         if (deletion != null) {
             val adapter = binding.messagesView.adapter as ListMessageAdapter
-            val appId = viewModel.appId
-            adapter.updateList(messages[appId])
+            adapter.updateList(currentMessages())
         }
     }
 
@@ -380,6 +421,19 @@ internal class MessagesActivity :
         val snackbar = Snackbar.make(view, R.string.snackbar_deleted, Snackbar.LENGTH_LONG)
         snackbar.setAction(R.string.snackbar_undo) { undoDelete() }
         snackbar.addCallback(SnackbarCallback())
+        snackbar.show()
+    }
+
+    private fun showMarkedReadSnackbar(message: Message) {
+        val snackbar = Snackbar.make(
+            binding.swipeRefresh,
+            R.string.snackbar_marked_read,
+            Snackbar.LENGTH_LONG
+        )
+        snackbar.setAction(R.string.snackbar_undo) {
+            viewModel.messages.markAsRead(message, false)
+            updateMessagesAndStopLoading(currentMessages())
+        }
         snackbar.show()
     }
 
@@ -399,22 +453,33 @@ internal class MessagesActivity :
         }
     }
 
-    private inner class SwipeToDeleteCallback(private val adapter: ListMessageAdapter) :
+    private inner class SwipeToReadCallback(private val adapter: ListMessageAdapter) :
         ItemTouchHelper.SimpleCallback(0, ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT) {
         private var icon: Drawable?
         private val background: ColorDrawable
 
         init {
             val backgroundColorId =
-                ContextCompat.getColor(this@MessagesActivity, R.color.swipeBackground)
+                ContextCompat.getColor(this@MessagesActivity, R.color.swipeReadBackground)
             val iconColorId = ContextCompat.getColor(this@MessagesActivity, R.color.swipeIcon)
-            val drawable = ContextCompat.getDrawable(this@MessagesActivity, R.drawable.ic_delete)
+            val drawable = ContextCompat.getDrawable(this@MessagesActivity, R.drawable.ic_mark_read)
             icon = null
             if (drawable != null) {
                 icon = DrawableCompat.wrap(drawable.mutate())
                 DrawableCompat.setTint(icon!!, iconColorId)
             }
             background = backgroundColorId.toDrawable()
+        }
+
+        override fun getSwipeDirs(
+            recyclerView: RecyclerView,
+            viewHolder: RecyclerView.ViewHolder
+        ): Int {
+            return if (viewModel.listMode == MessageListMode.UNREAD) {
+                super.getSwipeDirs(recyclerView, viewHolder)
+            } else {
+                0
+            }
         }
 
         override fun onMove(
@@ -426,7 +491,7 @@ internal class MessagesActivity :
         override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
             val position = viewHolder.adapterPosition
             val message = adapter.currentList[position]
-            scheduleDeletion(message.message)
+            markMessageAsRead(message)
         }
 
         override fun onChildDraw(
@@ -491,12 +556,12 @@ internal class MessagesActivity :
                 val totalItemCount = view.adapter!!.itemCount
                 if (lastVisibleItem > totalItemCount - 15 &&
                     totalItemCount != 0 &&
-                    viewModel.messages.canLoadMore(viewModel.appId)
+                    viewModel.messages.canLoadMore(currentDataAppId())
                 ) {
                     if (!isLoadMore) {
                         isLoadMore = true
                         launchCoroutine {
-                            loadMore(viewModel.appId)
+                            loadMore(currentDataAppId())
                         }
                     }
                 }
@@ -512,7 +577,7 @@ internal class MessagesActivity :
         viewModel.messages.addMessages(newMessages)
 
         if (newMessages.isNotEmpty()) {
-            updateMessagesForApplication(true, viewModel.appId)
+            updateCurrentMessageSelection(true)
         }
     }
 
@@ -527,16 +592,50 @@ internal class MessagesActivity :
 
             override fun onQueryTextChange(newText: String?): Boolean {
                 searchQuery = newText ?: ""
-                updateMessagesAndStopLoading(viewModel.messages[viewModel.appId])
+                updateMessagesAndStopLoading(currentMessages())
                 return true
             }
         })
-        menu.findItem(R.id.action_delete_app).isVisible =
-            viewModel.appId != MessageState.ALL_MESSAGES
         return super.onCreateOptionsMenu(menu)
     }
 
+    override fun onPrepareOptionsMenu(menu: Menu): Boolean {
+        val readToggle = menu.findItem(R.id.action_toggle_read)
+        val inFavorites = viewModel.listMode == MessageListMode.FAVORITES
+        readToggle.isVisible = !inFavorites
+        readToggle.setIcon(
+            if (viewModel.listMode == MessageListMode.READ) {
+                R.drawable.ic_mark_unread
+            } else {
+                R.drawable.ic_mark_read
+            }
+        )
+        readToggle.title = getString(
+            if (viewModel.listMode == MessageListMode.READ) {
+                R.string.show_unread_messages
+            } else {
+                R.string.show_read_messages
+            }
+        )
+        menu.findItem(R.id.action_delete_all).isVisible = !inFavorites
+        menu.findItem(R.id.action_delete_app).isVisible =
+            !inFavorites && viewModel.appId != MessageState.ALL_MESSAGES
+        return super.onPrepareOptionsMenu(menu)
+    }
+
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        if (item.itemId == R.id.action_toggle_read) {
+            viewModel.listMode = if (viewModel.listMode == MessageListMode.READ) {
+                MessageListMode.UNREAD
+            } else {
+                MessageListMode.READ
+            }
+            launchCoroutine {
+                updateCurrentMessageSelection(true)
+            }
+            invalidateOptionsMenu()
+            return true
+        }
         if (item.itemId == R.id.action_delete_all) {
             MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.delete_all)
@@ -557,7 +656,7 @@ internal class MessagesActivity :
                 .setNegativeButton(R.string.no, null)
                 .show()
         }
-        return super.onContextItemSelected(item)
+            return super.onOptionsItemSelected(item)
     }
 
     private fun deleteApp(appId: Long) {
@@ -576,7 +675,7 @@ internal class MessagesActivity :
 
     private suspend fun loadMore(appId: Long): List<MessageWithImage> {
         return try {
-            val messagesWithImages = viewModel.messages.loadMore(appId)
+            val messagesWithImages = viewModel.messages.loadMore(appId, viewModel.listMode)
             withContext(Dispatchers.Main) {
                 updateMessagesAndStopLoading(messagesWithImages)
             }
@@ -586,9 +685,9 @@ internal class MessagesActivity :
             withContext(Dispatchers.Main) {
                 isLoadMore = false
                 stopLoading()
-                updateMessagesAndStopLoading(viewModel.messages[appId])
+                updateMessagesAndStopLoading(currentMessages())
             }
-            viewModel.messages[appId]
+            currentMessages()
         }
     }
 
@@ -603,28 +702,28 @@ internal class MessagesActivity :
             if (!viewModel.messages.isLoaded(appId)) {
                 viewModel.messages.loadFromDb(appId)
                 withContext(Dispatchers.Main) {
-                    updateMessagesAndStopLoading(viewModel.messages[appId])
+                    updateMessagesAndStopLoading(currentMessages())
                     if (withLoadingSpinner) startLoading() // Resume loading for network phase
                 }
             }
-            viewModel.messages.loadMore(appId)
+            viewModel.messages.loadMore(appId, viewModel.listMode)
         } catch (t: Throwable) {
             Logger.error(t, "Failed updating messages for appId=$appId")
         } finally {
             withContext(Dispatchers.Main) {
-                updateMessagesAndStopLoading(viewModel.messages[appId])
+                updateMessagesAndStopLoading(currentMessages())
             }
         }
     }
 
     private suspend fun addSingleMessage(message: Message) {
         viewModel.messages.addMessages(listOf(message))
-        updateMessagesForApplication(false, viewModel.appId)
+        updateCurrentMessageSelection(false)
     }
 
     private suspend fun commitDeleteMessage() {
         viewModel.messages.commitDelete()
-        updateMessagesForApplication(false, viewModel.appId)
+        updateCurrentMessageSelection(false)
     }
 
     private suspend fun deleteMessages(appId: Long) {
@@ -633,7 +732,7 @@ internal class MessagesActivity :
         }
         val success = viewModel.messages.deleteAll(appId)
         if (success) {
-            updateMessagesForApplication(false, viewModel.appId)
+            updateCurrentMessageSelection(false)
         } else {
             withContext(Dispatchers.Main) {
                 Utils.showSnackBar(this@MessagesActivity, "Delete failed :(")
@@ -684,6 +783,7 @@ internal class MessagesActivity :
 
         if (filteredMessages.isEmpty()) {
             binding.flipper.displayedChild = 1
+            updateEmptyState()
         } else {
             binding.flipper.displayedChild = 0
         }
@@ -701,7 +801,70 @@ internal class MessagesActivity :
         }
     }
 
+    private suspend fun updateCurrentMessageSelection(withLoadingSpinner: Boolean) {
+        updateMessagesForApplication(withLoadingSpinner, currentDataAppId())
+    }
+
+    private fun currentDataAppId(): Long {
+        return if (viewModel.listMode == MessageListMode.FAVORITES) {
+            MessageState.ALL_MESSAGES
+        } else {
+            viewModel.appId
+        }
+    }
+
+    private fun currentMessages(): List<MessageWithImage> {
+        return viewModel.messages[currentDataAppId(), viewModel.listMode]
+    }
+
+    private fun updateToolbarSubtitle() {
+        binding.appBarDrawer.toolbar.subtitle = when (viewModel.listMode) {
+            MessageListMode.FAVORITES -> getString(R.string.favorites)
+            MessageListMode.UNREAD,
+            MessageListMode.READ -> if (viewModel.appId == MessageState.ALL_MESSAGES) {
+                ""
+            } else {
+                currentAppTitle()
+            }
+        }
+    }
+
+    private fun currentAppTitle(): String {
+        return viewModel.appsHolder.get().firstOrNull { it.id == viewModel.appId }?.name ?: ""
+    }
+
+    private fun updateEmptyState() {
+        when {
+            searchQuery.isNotEmpty() -> {
+                binding.textView2.setText(R.string.no_unread_messages)
+                binding.learnGotify.visibility = View.GONE
+            }
+
+            viewModel.listMode == MessageListMode.FAVORITES -> {
+                binding.textView2.setText(R.string.no_favorite_messages)
+                binding.learnGotify.visibility = View.GONE
+            }
+
+            viewModel.listMode == MessageListMode.READ -> {
+                binding.textView2.setText(R.string.no_read_messages)
+                binding.learnGotify.visibility = View.GONE
+            }
+
+            viewModel.appId == MessageState.ALL_MESSAGES -> {
+                binding.textView2.setText(R.string.no_messages_yet)
+                binding.learnGotify.visibility = View.VISIBLE
+            }
+
+            else -> {
+                binding.textView2.setText(R.string.no_unread_messages)
+                binding.learnGotify.visibility = View.GONE
+            }
+        }
+    }
+
     companion object {
         private const val APPLICATION_ORDER = 1
     }
+
+    private data class PendingSelection(val appId: Long, val listMode: MessageListMode)
 }
