@@ -1,12 +1,22 @@
 package com.github.gotify.messages.provider
 
 import com.github.gotify.client.model.Application
-import com.github.gotify.client.model.Message
 
 internal object MessageImageCombiner {
-    fun combine(messages: List<Message>, applications: List<Application>): List<MessageWithImage> {
+    fun combine(
+        messages: List<StoredMessage>,
+        applications: List<Application>
+    ): List<MessageWithImage> {
         val appIdToImage = appIdToImage(applications)
-        return messages.map { MessageWithImage(message = it, image = appIdToImage[it.appid]) }
+        return messages.map {
+            MessageWithImage(
+                message = it.message,
+                image = appIdToImage[it.appId],
+                isRead = it.isRead,
+                isFavorite = it.isFavorite,
+                isPlaceholder = it.isPlaceholder
+            )
+        }
     }
 
     private fun appIdToImage(applications: List<Application>): Map<Long, String> {

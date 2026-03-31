@@ -1,15 +1,20 @@
 package com.github.gotify.settings
 
+import android.app.Activity
 import android.app.Dialog
+import android.content.ActivityNotFoundException
 import android.content.DialogInterface
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.SharedPreferences.OnSharedPreferenceChangeListener
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.MenuItem
 import android.view.View
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.net.toUri
 import androidx.preference.ListPreference
@@ -20,9 +25,14 @@ import androidx.preference.PreferenceManager
 import androidx.preference.SwitchPreferenceCompat
 import com.github.gotify.R
 import com.github.gotify.Utils
+import com.github.gotify.database.LocalDataRepository
 import com.github.gotify.databinding.SettingsActivityBinding
 import com.github.gotify.service.WebSocketService
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 internal class SettingsActivity :
     AppCompatActivity(),
@@ -68,6 +78,20 @@ internal class SettingsActivity :
     }
 
     class SettingsFragment : PreferenceFragmentCompat() {
+        private val exportMessageStateLauncher: ActivityResultLauncher<Intent> =
+            registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+                if (result.resultCode == Activity.RESULT_OK) {
+                    result.data?.data?.let { exportMessageState(it) }
+                }
+            }
+
+        private val importMessageStateLauncher: ActivityResultLauncher<Intent> =
+            registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+                if (result.resultCode == Activity.RESULT_OK) {
+                    result.data?.data?.let { importMessageState(it) }
+                }
+            }
+
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
             setPreferencesFromResource(R.xml.root_preferences, rootKey)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -138,6 +162,14 @@ internal class SettingsActivity :
                     openSystemAlertWindowPermissionPage()
                 }
             }
+            findPreference<Preference>(getString(R.string.setting_key_export_message_state))
+                ?.setOnPreferenceClickListener {
+                    openExportMessageStateDocument()
+                }
+            findPreference<Preference>(getString(R.string.setting_key_import_message_state))
+                ?.setOnPreferenceClickListener {
+                    openImportMessageStateDocument()
+                }
             checkSystemAlertWindowPermission()
         }
 
@@ -162,6 +194,99 @@ internal class SettingsActivity :
                 startActivity(this)
             }
             return true
+        }
+
+        private fun openExportMessageStateDocument(): Boolean {
+            val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                type = "application/json"
+                addCategory(Intent.CATEGORY_OPENABLE)
+                putExtra(Intent.EXTRA_TITLE, getString(R.string.message_state_export_filename))
+            }
+            return launchDocumentIntent(
+                exportMessageStateLauncher,
+                intent,
+                R.string.message_state_select_export
+            )
+        }
+
+        private fun openImportMessageStateDocument(): Boolean {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                type = "application/json"
+                addCategory(Intent.CATEGORY_OPENABLE)
+            }
+            return launchDocumentIntent(
+                importMessageStateLauncher,
+                intent,
+                R.string.message_state_select_import
+            )
+        }
+
+        private fun launchDocumentIntent(
+            launcher: ActivityResultLauncher<Intent>,
+            intent: Intent,
+            chooserTitleRes: Int
+        ): Boolean {
+            return try {
+                launcher.launch(Intent.createChooser(intent, getString(chooserTitleRes)))
+                true
+            } catch (_: ActivityNotFoundException) {
+                Utils.showSnackBar(requireActivity(), getString(R.string.please_install_file_browser))
+                false
+            }
+        }
+
+        private fun exportMessageState(uri: Uri) {
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val snapshots = LocalDataRepository(requireContext()).exportMarkerSnapshots()
+                    val payload = MessageStateTransfer(markers = snapshots)
+                    requireContext().contentResolver.openOutputStream(uri)?.bufferedWriter().use { writer ->
+                        requireNotNull(writer) { "Could not open export destination" }
+                        writer.write(Utils.JSON.toJson(payload))
+                    }
+                    withContext(Dispatchers.Main) {
+                        Utils.showSnackBar(
+                            requireActivity(),
+                            getString(R.string.message_state_export_success, snapshots.size)
+                        )
+                    }
+                } catch (_: Exception) {
+                    withContext(Dispatchers.Main) {
+                        Utils.showSnackBar(
+                            requireActivity(),
+                            getString(R.string.message_state_export_failed)
+                        )
+                    }
+                }
+            }
+        }
+
+        private fun importMessageState(uri: Uri) {
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val payload = requireContext().contentResolver.openInputStream(uri)
+                        ?.bufferedReader().use { reader ->
+                            requireNotNull(reader) { "Could not open import source" }
+                            Utils.JSON.fromJson(reader, MessageStateTransfer::class.java)
+                        }
+                    val snapshots = payload?.markers.orEmpty()
+                    LocalDataRepository(requireContext()).importMarkerSnapshots(snapshots)
+                    withContext(Dispatchers.Main) {
+                        requireActivity().setResult(Activity.RESULT_OK)
+                        Utils.showSnackBar(
+                            requireActivity(),
+                            getString(R.string.message_state_import_success, snapshots.size)
+                        )
+                    }
+                } catch (_: Exception) {
+                    withContext(Dispatchers.Main) {
+                        Utils.showSnackBar(
+                            requireActivity(),
+                            getString(R.string.message_state_import_failed)
+                        )
+                    }
+                }
+            }
         }
 
         private fun checkSystemAlertWindowPermission() {

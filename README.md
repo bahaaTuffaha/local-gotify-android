@@ -78,11 +78,16 @@ This repository contains a small fork of the original Gotify Android client with
 - Instant offline UI: cached messages are loaded immediately on app start; network sync runs in the background and merges new messages without duplicating entries.
 - **Search Functionality**: Messages can be searched by title or content in each channel, with matching text highlighted in the results.
 - **Enhanced Message Rendering**: Full Markdown and HTML support for all messages, allowing styles like bold, italic, links, <u>underlines</u>, and tables to be displayed correctly.
+- **Read state per channel**: Messages can be marked as read locally and viewed in a dedicated Read view for the currently selected channel or for All Messages.
+- **Favorites**: Important messages can be starred locally and collected in a Favorites view from the navigation drawer.
+- **Local state import/export**: Read and favorite state can be exported and imported as JSON from Settings without exporting the full message payload.
+- **Safer message actions**: Swipe now marks messages as read instead of deleting them, and delete actions require confirmation.
 - Minimal behavioral change: when online the app still behaves like the original client; the caching layer is additive and only affects behavior when offline or when reconnecting.
 
 Why this differs from the original
 
 - The upstream client focuses on live push notifications. This fork keeps that behavior but adds a lightweight local cache to make the app usable when the device is offline or the server is temporarily unreachable.
+- The fork also adds local-only message state management for read and favorite tracking. These states are stored on-device and do not require server-side changes.
 - The changes are intentionally small and follow the project's existing patterns (Room, repository layer, and existing model classes) to keep maintenance and merging straightforward.
 
 [github-action-badge]: https://github.com/gotify/android/workflows/Build/badge.svg
